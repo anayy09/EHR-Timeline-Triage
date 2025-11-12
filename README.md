@@ -118,9 +118,28 @@ The project demonstrates how temporal sequence modeling (GRU, Transformer) can c
 
 ### Using Docker
 
+The easiest way to run the entire stack:
+
 ```bash
+# Build and start all services
 docker-compose up --build
+
+# Run in background
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop services
+docker-compose down
 ```
+
+This starts:
+- **API** at http://localhost:8000
+- **Frontend** at http://localhost:3000
+- All services connected with shared volumes for data and models
+
+See [Deployment Guide](docs/deployment.md) for production deployment options.
 
 ## Datasets
 
@@ -168,11 +187,12 @@ ehr-timeline-triage/
 
 ## Documentation
 
-- [System Design](docs/system_design.md)
-- [Data Pipeline](docs/data_pipeline.md)
-- [Models](docs/models.md)
-- [Interpretability](docs/interpretability.md)
-- [Limitations](docs/limitations.md)
+- [System Design](docs/system_design.md) - Architecture and component overview
+- [Data Pipeline](docs/data_pipeline.md) - Data processing and cohort building
+- [Models](docs/models.md) - Model descriptions and training
+- [Interpretability](docs/interpretability.md) - Explanation methods
+- [Limitations](docs/limitations.md) - Known limitations and ethical considerations
+- [Deployment Guide](docs/deployment.md) - Deployment options and production setup
 
 ## Testing
 
