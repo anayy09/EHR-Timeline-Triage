@@ -1,0 +1,109 @@
+# Feature Engineering Configuration
+# This file defines how raw EHR events are processed into features
+
+# Time binning
+time_bin_hours: 4
+
+# Task-specific configuration
+tasks:
+  readmission:
+    lookback_hours: 48  # Use last 48 hours before discharge
+    prediction_window_days: 30
+  
+  icu_mortality:
+    lookback_hours: 48  # Use first 48 hours of ICU stay
+    prediction_window_hours: 48
+
+# Feature definitions
+features:
+  vitals:
+    heart_rate:
+      min: 0
+      max: 250
+      unit: "bpm"
+    sbp:
+      min: 0
+      max: 300
+      unit: "mmHg"
+    dbp:
+      min: 0
+      max: 200
+      unit: "mmHg"
+    map:
+      min: 0
+      max: 250
+      unit: "mmHg"
+    respiratory_rate:
+      min: 0
+      max: 60
+      unit: "breaths/min"
+    spo2:
+      min: 0
+      max: 100
+      unit: "%"
+    temperature:
+      min: 30
+      max: 43
+      unit: "C"
+  
+  labs:
+    lactate:
+      min: 0
+      max: 30
+      unit: "mmol/L"
+    creatinine:
+      min: 0
+      max: 20
+      unit: "mg/dL"
+    wbc:
+      min: 0
+      max: 100
+      unit: "K/uL"
+    hemoglobin:
+      min: 0
+      max: 25
+      unit: "g/dL"
+    platelet:
+      min: 0
+      max: 1000
+      unit: "K/uL"
+    sodium:
+      min: 100
+      max: 180
+      unit: "mEq/L"
+    potassium:
+      min: 1
+      max: 10
+      unit: "mEq/L"
+    bun:
+      min: 0
+      max: 200
+      unit: "mg/dL"
+  
+  medications:
+    - vasopressor
+    - antibiotic
+    - sedative
+    - diuretic
+    - anticoagulant
+  
+  static:
+    - age
+    - sex
+    - comorbidity_chf
+    - comorbidity_renal
+    - comorbidity_liver
+    - comorbidity_copd
+    - comorbidity_diabetes
+
+# Normalization settings
+normalization:
+  method: "standard"  # standard, minmax, robust
+  clip_outliers: true
+  outlier_std: 5
+
+# Sequence modeling settings
+sequence:
+  max_length: 12  # 48 hours / 4 hour bins = 12 time steps
+  padding_value: 0.0
+  mask_padding: true

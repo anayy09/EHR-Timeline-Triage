@@ -1,0 +1,50 @@
+# Data paths configuration
+# Adjust these paths based on your data location
+
+# Raw data (MIMIC-IV or custom)
+raw_data:
+  use_synthetic: true  # Set to false if using MIMIC-IV
+  
+  # MIMIC-IV paths (if use_synthetic is false)
+  mimic:
+    admissions: "data/raw/mimic/admissions.csv"
+    patients: "data/raw/mimic/patients.csv"
+    icustays: "data/raw/mimic/icustays.csv"
+    chartevents: "data/raw/mimic/chartevents.csv"
+    labevents: "data/raw/mimic/labevents.csv"
+    prescriptions: "data/raw/mimic/prescriptions.csv"
+  
+  # Synthetic data paths
+  synthetic:
+    admissions: "data/synthetic/admissions.parquet"
+    patients: "data/synthetic/patients.parquet"
+    icustays: "data/synthetic/icustays.parquet"
+    events: "data/synthetic/events.parquet"
+
+# Processed data output
+processed_data:
+  cohorts:
+    readmission: "data/processed/cohort_readmission.parquet"
+    icu_mortality: "data/processed/cohort_icu_mortality.parquet"
+  
+  features:
+    readmission_snapshot: "data/processed/features_readmission_snapshot.parquet"
+    readmission_sequence: "data/processed/features_readmission_sequence/"
+    icu_mortality_snapshot: "data/processed/features_icu_mortality_snapshot.parquet"
+    icu_mortality_sequence: "data/processed/features_icu_mortality_sequence/"
+  
+  splits:
+    train_ratio: 0.7
+    val_ratio: 0.15
+    test_ratio: 0.15
+    random_state: 42
+
+# Synthetic data generation parameters
+synthetic_generation:
+  n_patients: 1000
+  n_admissions_per_patient: [1, 3]  # Range
+  icu_admission_rate: 0.3
+  readmission_rate: 0.15
+  mortality_rate: 0.10
+  event_frequency_hours: [1, 4]  # Range for event generation
+  random_state: 42
