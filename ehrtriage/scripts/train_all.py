@@ -85,7 +85,8 @@ def train_task(
     print(f"{'='*60}\n")
 
     # Split cohort
-    train_cohort, val_cohort, test_cohort = split_cohort(cohort_df)
+    label_col = "readmit_30d" if task_name == "readmission" else "mortality_label"
+    train_cohort, val_cohort, test_cohort = split_cohort(cohort_df, stratify_col=label_col)
 
     print(f"Split sizes:")
     print(f"  Train: {len(train_cohort)}")
@@ -203,9 +204,9 @@ def train_task(
     )
 
     # Data loaders
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False, pin_memory=True)
+    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False, pin_memory=True)
 
     # Get dimensions
     input_dim = train_seq_data["sequences"].shape[2]
@@ -225,11 +226,13 @@ def train_task(
         bidirectional=True,
     )
 
+    gru_model.to(device)
+
     gru_model, gru_history = train_sequence_model(
         gru_model,
         train_loader,
         val_loader,
-        num_epochs=20,  # Reduced for demo
+        num_epochs=200,  
         early_stopping_patience=5,
         device=device,
     )
