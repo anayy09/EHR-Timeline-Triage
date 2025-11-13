@@ -25,7 +25,7 @@ export default function TimelineBuilder({ onTimelineChange, taskType }: Timeline
   const loadExampleTimelines = async () => {
     setLoading(true);
     try {
-      const response = await fetch(`http://localhost:8000/example/${taskType}`);
+      const response = await fetch(`http://localhost:8000/api/example/${taskType}`);
       if (response.ok) {
         const data = await response.json();
         setExampleTimelines(data.examples || []);

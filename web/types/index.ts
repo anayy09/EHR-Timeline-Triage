@@ -12,6 +12,7 @@ export interface PatientTimeline {
   subject_id: string;
   stay_id: string | null;
   events: Event[];
+  static_features?: Record<string, any>;
 }
 
 export interface ContributingEvent {

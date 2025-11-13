@@ -30,7 +30,7 @@ export default function Home() {
     setError(null);
 
     try {
-      const response = await fetch(`http://localhost:8000/predict/${selectedTask}?model_type=${selectedModel}`, {
+      const response = await fetch(`http://localhost:8000/api/predict/${selectedTask}?model_type=${selectedModel}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
