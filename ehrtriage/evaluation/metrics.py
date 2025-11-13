@@ -52,7 +52,25 @@ def compute_classification_metrics(
 
     # Binary classification metrics
     y_pred = (y_pred_proba >= threshold).astype(int)
-    tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+    cm = confusion_matrix(y_true, y_pred)
+    
+    if cm.shape == (1, 1):
+        # Only one class present
+        unique_class = np.unique(y_true)[0]
+        if unique_class == 0:
+            # All negative
+            tn = cm[0, 0]
+            fp = 0
+            fn = 0
+            tp = 0
+        else:
+            # All positive
+            tn = 0
+            fp = 0
+            fn = 0
+            tp = cm[0, 0]
+    else:
+        tn, fp, fn, tp = cm.ravel()
 
     metrics["accuracy"] = (tp + tn) / (tp + tn + fp + fn)
     metrics["sensitivity"] = tp / (tp + fn) if (tp + fn) > 0 else 0.0

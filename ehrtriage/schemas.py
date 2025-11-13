@@ -81,8 +81,8 @@ class PatientTimeline(BaseModel):
     subject_id: str = Field(description="Unique patient identifier")
     stay_id: Optional[str] = Field(None, description="Hospital stay or ICU stay ID")
     events: List[Event] = Field(description="List of clinical events")
-    static_features: Optional[StaticFeatures] = Field(
-        None, description="Static patient features"
+    static_features: Optional[Dict[str, Any]] = Field(
+        None, description="Static patient features as key-value pairs"
     )
 
     @field_validator("events")
@@ -150,7 +150,7 @@ class ModelInfo(BaseModel):
     model_name: str
     model_type: str  # logistic, gru, transformer
     version: str
-    metrics: Dict[str, float]
+    metrics: Dict[str, Any]  # train/val/test metrics with nested dicts
     trained_date: Optional[str] = None
 
 

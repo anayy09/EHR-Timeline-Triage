@@ -99,6 +99,11 @@ def generate_admissions(
                 else None
             )
 
+            # Determine if this admission will lead to readmission
+            will_readmit = False
+            if adm_idx < n_admissions - 1:
+                will_readmit = np.random.random() < readmission_rate
+
             admissions.append(
                 {
                     "subject_id": subject_id,
@@ -107,6 +112,7 @@ def generate_admissions(
                     "dischtime": dischtime if not dies else deathtime,
                     "deathtime": deathtime,
                     "age": age,
+                    "will_readmit": will_readmit,
                 }
             )
 
@@ -255,6 +261,7 @@ def generate_events(
         icu_stay = icu_stays_df[icu_stays_df["hadm_id"] == hadm_id]
         is_icu = len(icu_stay) > 0
         will_die = adm["deathtime"] is not None
+        will_readmit = adm.get("will_readmit", False)
 
         # Generate events throughout stay
         current_time = start_time
@@ -262,16 +269,16 @@ def generate_events(
         while current_time < end_time:
             # Vitals (more frequent)
             for vital_name, (mean, std_mean, std) in vital_types.items():
-                # Abnormal values if patient is deteriorating
-                if will_die and current_time > (end_time - timedelta(hours=24)):
+                # Abnormal values if patient is deteriorating (death or readmission risk)
+                if (will_die or will_readmit) and current_time > (end_time - timedelta(hours=48)):
                     if vital_name == "heart_rate":
-                        value = np.random.normal(120, 20)
+                        value = np.random.normal(110, 20)
                     elif vital_name in ["sbp", "map"]:
-                        value = np.random.normal(85, 15)
+                        value = np.random.normal(90, 15)
                     elif vital_name == "spo2":
-                        value = np.random.normal(88, 8)
+                        value = np.random.normal(92, 5)
                     else:
-                        value = np.random.normal(mean, std * 2)
+                        value = np.random.normal(mean, std * 1.5)
                 else:
                     value = np.random.normal(np.random.normal(mean, std_mean), std)
 
@@ -290,14 +297,14 @@ def generate_events(
             # Labs (less frequent)
             if np.random.random() < 0.3:
                 for lab_name, (mean, std_mean, std) in lab_types.items():
-                    # Abnormal labs if deteriorating
-                    if will_die and current_time > (end_time - timedelta(hours=24)):
+                    # Abnormal labs if deteriorating (death or readmission risk)
+                    if (will_die or will_readmit) and current_time > (end_time - timedelta(hours=48)):
                         if lab_name == "lactate":
-                            value = np.random.normal(5.0, 2.0)
+                            value = np.random.normal(3.0, 1.0)
                         elif lab_name == "creatinine":
-                            value = np.random.normal(2.5, 1.0)
+                            value = np.random.normal(1.8, 0.5)
                         else:
-                            value = np.random.normal(mean, std * 2)
+                            value = np.random.normal(mean, std * 1.5)
                     else:
                         value = np.random.normal(np.random.normal(mean, std_mean), std)
 
@@ -467,12 +474,15 @@ if __name__ == "__main__":
         with open(data_config_path, "r") as f:
             data_config = yaml.safe_load(f)
         gen_config = data_config.get("synthetic_generation", {})
+        print(f"Loaded gen_config: {gen_config}")
     else:
         gen_config = {}
+        print("Config file not found")
 
     # Generate with config or defaults
+    print(f"gen_config: {gen_config}")
     generate_synthetic_data(
-        n_patients=gen_config.get("n_patients", 1000),
+        n_patients=2000,  # Hardcoded for now
         n_admissions_range=tuple(gen_config.get("n_admissions_per_patient", [1, 3])),
         icu_rate=gen_config.get("icu_admission_rate", 0.3),
         readmission_rate=gen_config.get("readmission_rate", 0.15),

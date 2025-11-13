@@ -10,8 +10,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Tuple
 
-import pandas as pd
 import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
 
 
 def build_readmission_cohort(
@@ -156,7 +157,19 @@ def build_icu_mortality_cohort(
     )
 
     # Determine mortality label
-    if admissions_df is not None and "deathtime" in admissions_df.columns:
+    if "deathtime" in icustays_df.columns:
+        # deathtime is in the icustays dataframe
+        icustays_df["deathtime"] = pd.to_datetime(icustays_df["deathtime"])
+
+        # Label = 1 if patient died after the 48-hour mark
+        icustays_df["mortality_label"] = (
+            (~icustays_df["deathtime"].isna())
+            & (icustays_df["deathtime"] > icustays_df["prediction_time_48h"])
+        ).astype(int)
+
+        icustays_df["actual_death_time"] = icustays_df["deathtime"]
+    elif admissions_df is not None and "deathtime" in admissions_df.columns:
+        # Fallback: deathtime is in admissions dataframe
         admissions_df["deathtime"] = pd.to_datetime(admissions_df["deathtime"])
 
         # Merge to get death information
@@ -204,6 +217,7 @@ def split_cohort(
     val_ratio: float = 0.15,
     test_ratio: float = 0.15,
     random_state: int = 42,
+    stratify_col: Optional[str] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Split cohort into train, validation, and test sets.
@@ -214,29 +228,43 @@ def split_cohort(
         val_ratio: Fraction for validation
         test_ratio: Fraction for testing
         random_state: Random seed
+        stratify_col: Column to stratify by (e.g., 'readmit_30d' or 'mortality_label')
 
     Returns:
         Tuple of (train_df, val_df, test_df)
     """
     assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6
 
-    n = len(cohort_df)
-    indices = np.arange(n)
-    np.random.seed(random_state)
-    np.random.shuffle(indices)
+    if stratify_col and stratify_col in cohort_df.columns:
+        stratify = cohort_df[stratify_col]
+        # Check if stratification is possible (each class must have at least 2 samples)
+        if stratify.value_counts().min() < 2:
+            stratify = None
+    else:
+        stratify = None
 
-    train_end = int(n * train_ratio)
-    val_end = train_end + int(n * val_ratio)
+    # First split: train + val vs test
+    test_size = test_ratio
+    train_val_size = 1 - test_size
 
-    train_idx = indices[:train_end]
-    val_idx = indices[train_end:val_end]
-    test_idx = indices[val_end:]
+    train_val_df, test_df = train_test_split(
+        cohort_df,
+        test_size=test_size,
+        random_state=random_state,
+        stratify=stratify,
+    )
 
-    train_df = cohort_df.iloc[train_idx].reset_index(drop=True)
-    val_df = cohort_df.iloc[val_idx].reset_index(drop=True)
-    test_df = cohort_df.iloc[test_idx].reset_index(drop=True)
+    # Second split: train vs val
+    val_size = val_ratio / (train_ratio + val_ratio)
 
-    return train_df, val_df, test_df
+    train_df, val_df = train_test_split(
+        train_val_df,
+        test_size=val_size,
+        random_state=random_state,
+        stratify=train_val_df[stratify_col] if stratify is not None else None,
+    )
+
+    return train_df.reset_index(drop=True), val_df.reset_index(drop=True), test_df.reset_index(drop=True)
 
 
 def load_cohort(cohort_path: Path) -> pd.DataFrame:
