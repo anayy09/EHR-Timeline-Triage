@@ -32,6 +32,9 @@ ENV/
 # VS Code
 .vscode/
 
+# Github
+.github/
+
 # Jupyter Notebook
 .ipynb_checkpoints
 *.ipynb_checkpoints/

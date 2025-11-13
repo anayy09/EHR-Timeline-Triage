@@ -318,40 +318,98 @@ async def get_example_timeline(task: TaskType):
     """
     # Create example timeline
     if task == TaskType.READMISSION:
-        return {
-            "subject_id": "P000001",
-            "stay_id": "H00000001",
-            "events": [
-                {"time": "2024-01-01T08:00:00", "type": "vital", "code": "heart_rate", "value": 85.0},
-                {"time": "2024-01-01T08:00:00", "type": "vital", "code": "sbp", "value": 120.0},
-                {"time": "2024-01-01T08:00:00", "type": "vital", "code": "spo2", "value": 97.0},
-                {"time": "2024-01-01T08:30:00", "type": "lab", "code": "lactate", "value": 1.2},
-                {"time": "2024-01-01T08:30:00", "type": "lab", "code": "creatinine", "value": 1.0},
-                {"time": "2024-01-01T09:00:00", "type": "medication", "code": "antibiotic", "value": 1.0},
-            ],
-            "static_features": {
-                "age": 65,
-                "sex": "M",
-                "comorbidity_chf": True,
-                "comorbidity_diabetes": True,
+        examples = [
+            {
+                "name": "Low Risk Patient",
+                "description": "65-year-old male with controlled diabetes, stable vitals",
+                "expected_risk": "Low",
+                "timeline": {
+                    "subject_id": "P000001",
+                    "stay_id": "H00000001",
+                    "events": [
+                        {"time": "2024-01-01T08:00:00", "type": "vital", "code": "heart_rate", "value": 75.0},
+                        {"time": "2024-01-01T08:00:00", "type": "vital", "code": "sbp", "value": 130.0},
+                        {"time": "2024-01-01T08:00:00", "type": "vital", "code": "spo2", "value": 98.0},
+                        {"time": "2024-01-01T08:30:00", "type": "lab", "code": "lactate", "value": 1.0},
+                        {"time": "2024-01-01T08:30:00", "type": "lab", "code": "creatinine", "value": 0.9},
+                    ],
+                    "static_features": {
+                        "age": 65,
+                        "sex": "M",
+                        "comorbidity_diabetes": True,
+                    },
+                },
             },
-        }
+            {
+                "name": "High Risk Patient",
+                "description": "72-year-old female with multiple comorbidities, abnormal vitals",
+                "expected_risk": "High",
+                "timeline": {
+                    "subject_id": "P000002",
+                    "stay_id": "H00000002",
+                    "events": [
+                        {"time": "2024-01-01T08:00:00", "type": "vital", "code": "heart_rate", "value": 110.0},
+                        {"time": "2024-01-01T08:00:00", "type": "vital", "code": "sbp", "value": 95.0},
+                        {"time": "2024-01-01T08:00:00", "type": "vital", "code": "spo2", "value": 88.0},
+                        {"time": "2024-01-01T08:30:00", "type": "lab", "code": "lactate", "value": 3.5},
+                        {"time": "2024-01-01T08:30:00", "type": "lab", "code": "creatinine", "value": 2.2},
+                        {"time": "2024-01-01T09:00:00", "type": "medication", "code": "vasopressor", "value": 1.0},
+                    ],
+                    "static_features": {
+                        "age": 72,
+                        "sex": "F",
+                        "comorbidity_chf": True,
+                        "comorbidity_renal": True,
+                        "comorbidity_copd": True,
+                    },
+                },
+            },
+        ]
     else:  # ICU_MORTALITY
-        return {
-            "subject_id": "P000002",
-            "stay_id": "ICU00000001",
-            "events": [
-                {"time": "2024-01-01T00:00:00", "type": "vital", "code": "heart_rate", "value": 110.0},
-                {"time": "2024-01-01T00:00:00", "type": "vital", "code": "map", "value": 65.0},
-                {"time": "2024-01-01T00:00:00", "type": "vital", "code": "spo2", "value": 90.0},
-                {"time": "2024-01-01T01:00:00", "type": "lab", "code": "lactate", "value": 3.5},
-                {"time": "2024-01-01T01:00:00", "type": "medication", "code": "vasopressor", "value": 1.0},
-                {"time": "2024-01-01T02:00:00", "type": "vital", "code": "heart_rate", "value": 125.0},
-            ],
-            "static_features": {
-                "age": 72,
-                "sex": "F",
-                "comorbidity_renal": True,
-                "comorbidity_copd": True,
+        examples = [
+            {
+                "name": "Stable ICU Patient",
+                "description": "55-year-old male, stable vitals, no vasopressors",
+                "expected_risk": "Low",
+                "timeline": {
+                    "subject_id": "P000003",
+                    "stay_id": "ICU00000001",
+                    "events": [
+                        {"time": "2024-01-01T00:00:00", "type": "vital", "code": "heart_rate", "value": 85.0},
+                        {"time": "2024-01-01T00:00:00", "type": "vital", "code": "map", "value": 75.0},
+                        {"time": "2024-01-01T00:00:00", "type": "vital", "code": "spo2", "value": 96.0},
+                        {"time": "2024-01-01T01:00:00", "type": "lab", "code": "lactate", "value": 1.5},
+                    ],
+                    "static_features": {
+                        "age": 55,
+                        "sex": "M",
+                        "comorbidity_diabetes": True,
+                    },
+                },
             },
-        }
+            {
+                "name": "Critical ICU Patient",
+                "description": "68-year-old female, on vasopressors, abnormal labs",
+                "expected_risk": "High",
+                "timeline": {
+                    "subject_id": "P000004",
+                    "stay_id": "ICU00000002",
+                    "events": [
+                        {"time": "2024-01-01T00:00:00", "type": "vital", "code": "heart_rate", "value": 125.0},
+                        {"time": "2024-01-01T00:00:00", "type": "vital", "code": "map", "value": 55.0},
+                        {"time": "2024-01-01T00:00:00", "type": "vital", "code": "spo2", "value": 85.0},
+                        {"time": "2024-01-01T01:00:00", "type": "lab", "code": "lactate", "value": 5.2},
+                        {"time": "2024-01-01T01:00:00", "type": "medication", "code": "vasopressor", "value": 1.0},
+                        {"time": "2024-01-01T02:00:00", "type": "vital", "code": "heart_rate", "value": 135.0},
+                    ],
+                    "static_features": {
+                        "age": 68,
+                        "sex": "F",
+                        "comorbidity_chf": True,
+                        "comorbidity_renal": True,
+                    },
+                },
+            },
+        ]
+
+    return {"examples": examples}
