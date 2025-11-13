@@ -36,9 +36,15 @@ def test_get_example_timeline_readmission():
     response = client.get("/api/example/readmission")
     assert response.status_code == 200
     data = response.json()
-    assert "subject_id" in data
-    assert "events" in data
-    assert len(data["events"]) > 0
+    assert "examples" in data
+    assert isinstance(data["examples"], list)
+    assert len(data["examples"]) > 0
+    example = data["examples"][0]
+    assert "name" in example
+    assert "description" in example
+    assert "timeline" in example
+    assert "subject_id" in example["timeline"]
+    assert "events" in example["timeline"]
 
 
 def test_get_example_timeline_icu_mortality():
@@ -46,16 +52,23 @@ def test_get_example_timeline_icu_mortality():
     response = client.get("/api/example/icu_mortality")
     assert response.status_code == 200
     data = response.json()
-    assert "subject_id" in data
-    assert "events" in data
-    assert len(data["events"]) > 0
+    assert "examples" in data
+    assert isinstance(data["examples"], list)
+    assert len(data["examples"]) > 0
+    example = data["examples"][0]
+    assert "name" in example
+    assert "description" in example
+    assert "timeline" in example
+    assert "subject_id" in example["timeline"]
+    assert "events" in example["timeline"]
 
 
 def test_predict_with_example():
     """Test prediction endpoint with example data."""
     # Get example timeline
     example_response = client.get("/api/example/readmission")
-    timeline = example_response.json()
+    examples_data = example_response.json()
+    timeline = examples_data["examples"][0]["timeline"]
 
     # Make prediction (may fail if no models trained, but should not crash)
     response = client.post(
