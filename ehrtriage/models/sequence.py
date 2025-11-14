@@ -11,6 +11,8 @@ from typing import Dict, Optional, Tuple
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.nn.utils import clip_grad_norm_
+from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -65,6 +67,9 @@ class GRURiskModel(nn.Module):
         # Combine with static features
         combined_dim = gru_output_dim + static_dim
 
+        # Temporal attention to focus on informative windows
+        self.attention = TemporalAttentionPooling(gru_output_dim)
+
         # Prediction head
         self.fc = nn.Sequential(
             nn.Linear(combined_dim, hidden_dim),
@@ -77,7 +82,7 @@ class GRURiskModel(nn.Module):
         self, sequence: torch.Tensor, static: torch.Tensor, mask: torch.Tensor
     ) -> torch.Tensor:
         """
-        Forward pass.
+        Forward pass with mask-aware pooling.
 
         Args:
             sequence: Input sequence [batch, seq_len, input_dim]
@@ -87,19 +92,22 @@ class GRURiskModel(nn.Module):
         Returns:
             Risk logits [batch, 1]
         """
-        # Pack sequence (handle variable lengths)
-        # For simplicity, we use the full sequence with masking
-        gru_out, hidden = self.gru(sequence)  # [batch, seq_len, hidden_dim * directions]
+        lengths = mask.sum(dim=1).long().clamp(min=1)
 
-        # Use last hidden state (from both directions if bidirectional)
-        if self.bidirectional:
-            # Concatenate last hidden states from both directions
-            hidden = torch.cat([hidden[-2], hidden[-1]], dim=1)  # [batch, hidden_dim * 2]
-        else:
-            hidden = hidden[-1]  # [batch, hidden_dim]
+        packed_seq = pack_padded_sequence(
+            sequence, lengths.cpu(), batch_first=True, enforce_sorted=False
+        )
+        packed_out, _ = self.gru(packed_seq)
+
+        # Recover padded output to apply attention with the original mask
+        gru_out, _ = pad_packed_sequence(
+            packed_out, batch_first=True, total_length=sequence.size(1)
+        )
+
+        attended = self.attention(gru_out, mask)
 
         # Combine with static features
-        combined = torch.cat([hidden, static], dim=1)
+        combined = torch.cat([attended, static], dim=1)
 
         # Predict
         logits = self.fc(combined)
@@ -197,9 +205,8 @@ class TransformerRiskModel(nn.Module):
 
         # Pool over sequence (use mean of non-masked positions)
         mask_expanded = mask.unsqueeze(-1)  # [batch, seq_len, 1]
-        pooled = (encoded * mask_expanded).sum(dim=1) / mask_expanded.sum(
-            dim=1
-        )  # [batch, d_model]
+        mask_sum = mask_expanded.sum(dim=1).clamp(min=1e-6)
+        pooled = (encoded * mask_expanded).sum(dim=1) / mask_sum  # [batch, d_model]
 
         # Combine with static features
         combined = torch.cat([pooled, static], dim=1)
@@ -208,6 +215,38 @@ class TransformerRiskModel(nn.Module):
         logits = self.fc(combined)
 
         return logits
+
+
+class TemporalAttentionPooling(nn.Module):
+    """Applies learnable attention weights over temporal outputs."""
+
+    def __init__(self, input_dim: int):
+        super().__init__()
+        hidden_dim = max(32, input_dim // 2)
+        self.attn = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, 1),
+        )
+
+    def forward(self, sequence: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            sequence: Tensor [batch, seq_len, input_dim]
+            mask: Padding mask [batch, seq_len]
+        Returns:
+            Weighted context vector [batch, input_dim]
+        """
+        attn_mask = mask.clone()
+        zero_length = attn_mask.sum(dim=1) == 0
+        if zero_length.any():
+            attn_mask[zero_length, 0] = 1.0
+
+        scores = self.attn(sequence).squeeze(-1)
+        scores = scores.masked_fill(attn_mask == 0, -1e9)
+        weights = torch.softmax(scores, dim=1)
+        pooled = torch.sum(sequence * weights.unsqueeze(-1), dim=1)
+        return pooled
 
 
 class PositionalEncoding(nn.Module):
@@ -242,6 +281,8 @@ def train_sequence_model(
     learning_rate: float = 0.001,
     weight_decay: float = 0.0001,
     early_stopping_patience: int = 10,
+    label_smoothing: float = 0.05,
+    grad_clip: Optional[float] = 5.0,
     device: str = "cpu",
 ) -> Tuple[nn.Module, Dict]:
     """
@@ -255,6 +296,8 @@ def train_sequence_model(
         learning_rate: Learning rate
         weight_decay: Weight decay for regularization
         early_stopping_patience: Patience for early stopping
+        label_smoothing: Amount of label smoothing for stability
+        grad_clip: Gradient clipping value (None to disable)
         device: Device to train on
 
     Returns:
@@ -264,11 +307,32 @@ def train_sequence_model(
 
     model = model.to(device)
 
+    # Class imbalance-aware weighting
+    dataset = getattr(train_loader, "dataset", None)
+    pos_weight_tensor = None
+    if dataset is not None and hasattr(dataset, "labels"):
+        labels_tensor = dataset.labels
+        pos_count = float(labels_tensor.sum().item())
+        neg_count = float(len(labels_tensor) - pos_count)
+        if pos_count > 0 and neg_count > 0:
+            imbalance = neg_count / pos_count
+            pos_weight_tensor = torch.tensor([imbalance], device=device)
+            print(f"Using positive class weight: {imbalance:.2f}")
+
     # Loss and optimizer
-    criterion = nn.BCEWithLogitsLoss()
+    criterion = (
+        nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
+        if pos_weight_tensor is not None
+        else nn.BCEWithLogitsLoss()
+    )
     optimizer = torch.optim.Adam(
         model.parameters(), lr=learning_rate, weight_decay=weight_decay
     )
+    scheduler = None
+    if val_loader is not None:
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="max", factor=0.5, patience=2
+        )
 
     # Training history
     history = {
@@ -298,9 +362,16 @@ def train_sequence_model(
             optimizer.zero_grad()
 
             logits = model(sequence, static, mask).squeeze()
-            loss = criterion(logits, labels)
+            smooth_labels = (
+                labels * (1.0 - label_smoothing) + 0.5 * label_smoothing
+                if label_smoothing > 0
+                else labels
+            )
+            loss = criterion(logits, smooth_labels)
 
             loss.backward()
+            if grad_clip is not None:
+                clip_grad_norm_(model.parameters(), grad_clip)
             optimizer.step()
 
             train_loss += loss.item()
@@ -308,7 +379,6 @@ def train_sequence_model(
         train_loss /= len(train_loader)
         history["train_loss"].append(train_loss)
 
-        # Validation
         if val_loader is not None:
             model.eval()
             val_loss = 0.0
@@ -323,7 +393,12 @@ def train_sequence_model(
                     labels = batch["label"].float().to(device)
 
                     logits = model(sequence, static, mask).squeeze()
-                    loss = criterion(logits, labels)
+                    smooth_labels = (
+                        labels * (1.0 - label_smoothing) + 0.5 * label_smoothing
+                        if label_smoothing > 0
+                        else labels
+                    )
+                    loss = criterion(logits, smooth_labels)
 
                     val_loss += loss.item()
 
@@ -356,6 +431,9 @@ def train_sequence_model(
                 best_model_state = model.state_dict().copy()
             else:
                 patience_counter += 1
+
+            if scheduler is not None:
+                scheduler.step(metrics["auroc"])
 
             if patience_counter >= early_stopping_patience:
                 print(f"Early stopping at epoch {epoch+1}")

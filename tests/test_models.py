@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from ehrtriage.models.baselines import LogisticBaseline
+from ehrtriage.models.baselines import LogisticBaseline, find_optimal_threshold
 from ehrtriage.models.sequence import GRURiskModel, TransformerRiskModel
 
 
@@ -26,10 +26,22 @@ def test_logistic_model_fit_predict():
     probs = model.predict_proba(X)
     preds = model.predict(X)
 
+    # Calibrate and re-predict
+    model.calibrate(X, y, method="sigmoid")
+    probs_cal = model.predict_proba(X)
+    threshold, score = find_optimal_threshold(y, probs_cal[:, 1])
+    model.set_decision_threshold(threshold)
+    preds_cal = model.predict(X)
+
     assert probs.shape == (n_samples, 2)
     assert preds.shape == (n_samples,)
     assert np.all((probs >= 0) & (probs <= 1))
     assert np.all((preds == 0) | (preds == 1))
+    assert np.all((probs_cal >= 0) & (probs_cal <= 1))
+    assert 0.0 <= threshold <= 1.0
+    assert score <= 1.0
+    assert preds_cal.shape == (n_samples,)
+    assert np.all((preds_cal == 0) | (preds_cal == 1))
 
 
 def test_gru_model_forward():
