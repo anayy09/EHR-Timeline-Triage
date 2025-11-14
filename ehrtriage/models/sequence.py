@@ -307,6 +307,11 @@ def train_sequence_model(
 
     model = model.to(device)
 
+    amp_enabled = device.startswith("cuda") and torch.cuda.is_available()
+    scaler = torch.cuda.amp.GradScaler(enabled=amp_enabled)
+    if device.startswith("cuda"):
+        torch.backends.cudnn.benchmark = True
+
     # Class imbalance-aware weighting
     dataset = getattr(train_loader, "dataset", None)
     pos_weight_tensor = None
@@ -354,25 +359,28 @@ def train_sequence_model(
         train_loss = 0.0
 
         for batch in train_loader:
-            sequence = batch["sequence"].to(device)
-            static = batch["static"].to(device)
-            mask = batch["mask"].to(device)
-            labels = batch["label"].float().to(device)
+            sequence = batch["sequence"].to(device, non_blocking=True)
+            static = batch["static"].to(device, non_blocking=True)
+            mask = batch["mask"].to(device, non_blocking=True)
+            labels = batch["label"].float().to(device, non_blocking=True)
 
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
 
-            logits = model(sequence, static, mask).squeeze()
-            smooth_labels = (
-                labels * (1.0 - label_smoothing) + 0.5 * label_smoothing
-                if label_smoothing > 0
-                else labels
-            )
-            loss = criterion(logits, smooth_labels)
+            with torch.cuda.amp.autocast(enabled=amp_enabled):
+                logits = model(sequence, static, mask).squeeze()
+                smooth_labels = (
+                    labels * (1.0 - label_smoothing) + 0.5 * label_smoothing
+                    if label_smoothing > 0
+                    else labels
+                )
+                loss = criterion(logits, smooth_labels)
 
-            loss.backward()
+            scaler.scale(loss).backward()
             if grad_clip is not None:
+                scaler.unscale_(optimizer)
                 clip_grad_norm_(model.parameters(), grad_clip)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
 
             train_loss += loss.item()
 
@@ -387,18 +395,19 @@ def train_sequence_model(
 
             with torch.no_grad():
                 for batch in val_loader:
-                    sequence = batch["sequence"].to(device)
-                    static = batch["static"].to(device)
-                    mask = batch["mask"].to(device)
-                    labels = batch["label"].float().to(device)
+                    sequence = batch["sequence"].to(device, non_blocking=True)
+                    static = batch["static"].to(device, non_blocking=True)
+                    mask = batch["mask"].to(device, non_blocking=True)
+                    labels = batch["label"].float().to(device, non_blocking=True)
 
-                    logits = model(sequence, static, mask).squeeze()
-                    smooth_labels = (
-                        labels * (1.0 - label_smoothing) + 0.5 * label_smoothing
-                        if label_smoothing > 0
-                        else labels
-                    )
-                    loss = criterion(logits, smooth_labels)
+                    with torch.cuda.amp.autocast(enabled=amp_enabled):
+                        logits = model(sequence, static, mask).squeeze()
+                        smooth_labels = (
+                            labels * (1.0 - label_smoothing) + 0.5 * label_smoothing
+                            if label_smoothing > 0
+                            else labels
+                        )
+                        loss = criterion(logits, smooth_labels)
 
                     val_loss += loss.item()
 

@@ -13,6 +13,7 @@ Usage:
 """
 
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -20,15 +21,29 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 
-from ehrtriage.config import CONFIG_DIR, DATA_DIR, MODELS_DIR, get_feature_config
+from ehrtriage.config import (
+    DATA_DIR,
+    MODELS_DIR,
+    get_default_model_config,
+    get_feature_config,
+)
 from ehrtriage.cohort import (
     build_readmission_cohort,
     build_icu_mortality_cohort,
     split_cohort,
     save_cohort,
 )
-from ehrtriage.features import build_snapshot_features, normalize_features
-from ehrtriage.sequence_builder import build_sequence_features, SequenceDataset
+from ehrtriage.features import (
+    build_snapshot_features,
+    load_features,
+    normalize_features,
+    save_features,
+)
+from ehrtriage.sequence_builder import (
+    SequenceDataset,
+    build_sequence_features,
+    load_sequence_features,
+)
 from ehrtriage.models.baselines import train_logistic_model
 from ehrtriage.models.sequence import (
     GRURiskModel,
@@ -62,6 +77,68 @@ def load_or_generate_data():
 
     return admissions, patients, icustays, events
 
+def _snapshot_features_path(task_name: str, split_name: str) -> Path:
+    """Return the cache path for snapshot features."""
+
+    return DATA_DIR / "processed" / f"{task_name}_snapshot_{split_name}.parquet"
+
+
+def _load_or_build_snapshot_features(
+    task_name: str,
+    split_name: str,
+    cohort_split: pd.DataFrame,
+    events_df: pd.DataFrame,
+    patients_df: pd.DataFrame,
+    config: dict,
+) -> pd.DataFrame:
+    """Build snapshot features and cache them on disk for reuse."""
+
+    cache_path = _snapshot_features_path(task_name, split_name)
+    if cache_path.exists():
+        print(
+            f"Loading cached snapshot features for {task_name} [{split_name}] from {cache_path}"
+        )
+        return load_features(cache_path)
+
+    print(f"Building snapshot features for {task_name} [{split_name}]...")
+    features = build_snapshot_features(events_df, cohort_split, patients_df, task_name, config)
+    save_features(features, str(cache_path))
+    return features
+
+
+def _load_or_build_sequence_features(
+    task_name: str,
+    split_name: str,
+    cohort_split: pd.DataFrame,
+    events_df: pd.DataFrame,
+    patients_df: pd.DataFrame,
+    config: dict,
+) -> dict:
+    """Build sequence features and cache them to disk for reuse."""
+
+    output_dir = DATA_DIR / "processed" / f"{task_name}_sequence_{split_name}"
+    required_files = [
+        output_dir / "sequences.npy",
+        output_dir / "masks.npy",
+        output_dir / "labels.npy",
+        output_dir / "static_features.npy",
+    ]
+
+    if all(path.exists() for path in required_files):
+        print(
+            f"Loading cached sequence features for {task_name} [{split_name}] from {output_dir}"
+        )
+        return load_sequence_features(output_dir)
+
+    print(f"Building sequence features for {task_name} [{split_name}]...")
+    return build_sequence_features(
+        events_df,
+        cohort_split,
+        patients_df,
+        task_name,
+        config,
+        output_dir,
+    )
 
 def train_task(
     task_name: str,
@@ -104,14 +181,15 @@ def train_task(
 
     # Build snapshot features
     print("Building snapshot features...")
-    train_features = build_snapshot_features(
-        events_df, train_cohort, patients_df, task_name, config
+    # Build or load snapshot features for each split
+    train_features = _load_or_build_snapshot_features(
+        task_name, "train", train_cohort, events_df, patients_df, config
     )
-    val_features = build_snapshot_features(
-        events_df, val_cohort, patients_df, task_name, config
+    val_features = _load_or_build_snapshot_features(
+        task_name, "val", val_cohort, events_df, patients_df, config
     )
-    test_features = build_snapshot_features(
-        events_df, test_cohort, patients_df, task_name, config
+    test_features = _load_or_build_snapshot_features(
+        task_name, "test", test_cohort, events_df, patients_df, config
     )
 
     # Normalize
@@ -167,18 +245,18 @@ def train_task(
     # Build sequence features
     print("Building sequence features...")
     train_seq_dir = DATA_DIR / "processed" / f"{task_name}_sequence_train"
-    train_seq_data = build_sequence_features(
-        events_df, train_cohort, patients_df, task_name, config, train_seq_dir
+    train_seq_data = _load_or_build_sequence_features(
+        task_name, "train", train_cohort, events_df, patients_df, config
     )
 
     val_seq_dir = DATA_DIR / "processed" / f"{task_name}_sequence_val"
-    val_seq_data = build_sequence_features(
-        events_df, val_cohort, patients_df, task_name, config, val_seq_dir
+    val_seq_data = _load_or_build_sequence_features(
+        task_name, "val", val_cohort, events_df, patients_df, config
     )
 
     test_seq_dir = DATA_DIR / "processed" / f"{task_name}_sequence_test"
-    test_seq_data = build_sequence_features(
-        events_df, test_cohort, patients_df, task_name, config, test_seq_dir
+    test_seq_data = _load_or_build_sequence_features(
+        task_name, "test", test_cohort, events_df, patients_df, config
     )
 
     # Create datasets
@@ -204,9 +282,35 @@ def train_task(
     )
 
     # Data loaders
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False, pin_memory=True)
-    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False, pin_memory=True)
+    gru_config = get_default_model_config("gru")
+    batch_size = gru_config.get("batch_size", 32)
+    num_workers = min(4, (os.cpu_count() or 1))
+    pin_memory = device == "cuda"
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        pin_memory=pin_memory,
+        num_workers=num_workers,
+        persistent_workers=num_workers > 0,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        pin_memory=pin_memory,
+        num_workers=num_workers,
+        persistent_workers=num_workers > 0,
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        pin_memory=pin_memory,
+        num_workers=num_workers,
+        persistent_workers=num_workers > 0,
+    )
 
     # Get dimensions
     input_dim = train_seq_data["sequences"].shape[2]
@@ -220,10 +324,10 @@ def train_task(
     gru_model = GRURiskModel(
         input_dim=input_dim,
         static_dim=static_dim,
-        hidden_dim=64,
-        num_layers=2,
-        dropout=0.3,
-        bidirectional=True,
+        hidden_dim=gru_config.get("hidden_dim", 64),
+        num_layers=gru_config.get("num_layers", 2),
+        dropout=gru_config.get("dropout", 0.3),
+        bidirectional=gru_config.get("bidirectional", True),
     )
 
     gru_model.to(device)
@@ -232,8 +336,10 @@ def train_task(
         gru_model,
         train_loader,
         val_loader,
-        num_epochs=200,  
-        early_stopping_patience=5,
+        num_epochs=gru_config.get("epochs", 50),
+        learning_rate=gru_config.get("learning_rate", 0.001),
+        weight_decay=gru_config.get("weight_decay", 0.0001),
+        early_stopping_patience=gru_config.get("early_stopping_patience", 10),
         device=device,
     )
 
@@ -241,10 +347,10 @@ def train_task(
     gru_config = {
         "input_dim": input_dim,
         "static_dim": static_dim,
-        "hidden_dim": 64,
-        "num_layers": 2,
-        "dropout": 0.3,
-        "bidirectional": True,
+        "hidden_dim": gru_config.get("hidden_dim", 64),
+        "num_layers": gru_config.get("num_layers", 2),
+        "dropout": gru_config.get("dropout", 0.3),
+        "bidirectional": gru_config.get("bidirectional", True),
     }
     save_sequence_model(gru_model, output_dir, "gru", gru_config, gru_history)
 
