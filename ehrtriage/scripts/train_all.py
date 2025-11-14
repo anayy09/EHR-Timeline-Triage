@@ -281,6 +281,13 @@ def train_task(
         test_seq_data["static_features"],
     )
 
+    # Get dimensions
+    input_dim = train_seq_data["sequences"].shape[2]
+    static_dim = train_seq_data["static_features"].shape[1]
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}")
+
     # Data loaders
     gru_config = get_default_model_config("gru")
     batch_size = gru_config.get("batch_size", 32)
@@ -311,13 +318,6 @@ def train_task(
         num_workers=num_workers,
         persistent_workers=num_workers > 0,
     )
-
-    # Get dimensions
-    input_dim = train_seq_data["sequences"].shape[2]
-    static_dim = train_seq_data["static_features"].shape[1]
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
 
     # Train GRU model
     print("\nTraining GRU model...")

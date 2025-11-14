@@ -243,7 +243,7 @@ class TemporalAttentionPooling(nn.Module):
             attn_mask[zero_length, 0] = 1.0
 
         scores = self.attn(sequence).squeeze(-1)
-        scores = scores.masked_fill(attn_mask == 0, -1e9)
+        scores = scores.masked_fill(attn_mask == 0, float('-inf'))
         weights = torch.softmax(scores, dim=1)
         pooled = torch.sum(sequence * weights.unsqueeze(-1), dim=1)
         return pooled
@@ -308,7 +308,7 @@ def train_sequence_model(
     model = model.to(device)
 
     amp_enabled = device.startswith("cuda") and torch.cuda.is_available()
-    scaler = torch.cuda.amp.GradScaler(enabled=amp_enabled)
+    scaler = torch.amp.GradScaler('cuda', enabled=amp_enabled)
     if device.startswith("cuda"):
         torch.backends.cudnn.benchmark = True
 
@@ -366,7 +366,7 @@ def train_sequence_model(
 
             optimizer.zero_grad(set_to_none=True)
 
-            with torch.cuda.amp.autocast(enabled=amp_enabled):
+            with torch.amp.autocast('cuda', enabled=amp_enabled):
                 logits = model(sequence, static, mask).squeeze()
                 smooth_labels = (
                     labels * (1.0 - label_smoothing) + 0.5 * label_smoothing
@@ -400,7 +400,7 @@ def train_sequence_model(
                     mask = batch["mask"].to(device, non_blocking=True)
                     labels = batch["label"].float().to(device, non_blocking=True)
 
-                    with torch.cuda.amp.autocast(enabled=amp_enabled):
+                    with torch.amp.autocast('cuda', enabled=amp_enabled):
                         logits = model(sequence, static, mask).squeeze()
                         smooth_labels = (
                             labels * (1.0 - label_smoothing) + 0.5 * label_smoothing
