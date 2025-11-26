@@ -6,7 +6,7 @@ pyyaml==6.0.3
 
 # Machine Learning
 scikit-learn==1.7.2
-torch==2.7.1+cu118
+torch==2.7.1
 torchmetrics==1.8.2
 lifelines==0.30.0
 
