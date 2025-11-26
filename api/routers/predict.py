@@ -6,7 +6,7 @@ Handles risk prediction requests for different tasks.
 
 import json
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Any, Tuple
 
 import numpy as np
 import pandas as pd
@@ -27,11 +27,11 @@ from ehrtriage.explain.text_generator import explain_prediction
 router = APIRouter()
 
 # Global model cache
-_model_cache: Dict[str, any] = {}
+_model_cache: Dict[str, Any] = {}
 
 
-def load_model_from_cache(task: str, model_type: str = "logistic"):
-    """Load model from cache or disk."""
+def load_model_from_cache(task: str, model_type: str = "logistic") -> Tuple[Any, Optional[Dict]]:
+    """Load model from cache or disk. Returns (model, config) tuple."""
     cache_key = f"{task}_{model_type}"
 
     if cache_key in _model_cache:
@@ -45,18 +45,41 @@ def load_model_from_cache(task: str, model_type: str = "logistic"):
 
         try:
             model = LogisticBaseline.load(model_dir, "logistic")
-            _model_cache[cache_key] = model
-            return model
+            _model_cache[cache_key] = (model, None)
+            return model, None
         except Exception as e:
             raise HTTPException(
                 status_code=404,
                 detail=f"Model not found for {task}/{model_type}: {str(e)}",
             )
+    elif model_type == "gru":
+        from ehrtriage.models.sequence import GRURiskModel, load_sequence_model
+
+        try:
+            model, config = load_sequence_model(GRURiskModel, model_dir, "gru", device="cpu")
+            _model_cache[cache_key] = (model, config)
+            return model, config
+        except Exception as e:
+            raise HTTPException(
+                status_code=404,
+                detail=f"GRU model not found for {task}: {str(e)}",
+            )
+    elif model_type == "transformer":
+        from ehrtriage.models.sequence import TransformerRiskModel, load_sequence_model
+
+        try:
+            model, config = load_sequence_model(TransformerRiskModel, model_dir, "transformer", device="cpu")
+            _model_cache[cache_key] = (model, config)
+            return model, config
+        except Exception as e:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Transformer model not found for {task}: {str(e)}",
+            )
     else:
-        # Sequence models would be loaded here
         raise HTTPException(
-            status_code=501,
-            detail=f"Sequence models not yet implemented in API",
+            status_code=400,
+            detail=f"Unknown model type: {model_type}. Supported: logistic, gru, transformer",
         )
 
 
@@ -74,16 +97,28 @@ def convert_timeline_to_features(
     # Extract vital/lab/med features
     features = {}
 
-    # Static features
-    if timeline.static_features:
-        features["age"] = timeline.static_features.age or 50
-        features["sex_M"] = 1.0 if timeline.static_features.sex == "M" else 0.0
-        features["sex_F"] = 1.0 if timeline.static_features.sex == "F" else 0.0
-        features["comorbidity_chf"] = float(timeline.static_features.comorbidity_chf)
-        features["comorbidity_renal"] = float(timeline.static_features.comorbidity_renal)
-        features["comorbidity_liver"] = float(timeline.static_features.comorbidity_liver)
-        features["comorbidity_copd"] = float(timeline.static_features.comorbidity_copd)
-        features["comorbidity_diabetes"] = float(timeline.static_features.comorbidity_diabetes)
+    # Static features - handle both dict and StaticFeatures object
+    static = timeline.static_features
+    if static is not None:
+        if isinstance(static, dict):
+            features["age"] = static.get("age", 50) or 50
+            sex = static.get("sex", "U")
+            features["sex_M"] = 1.0 if sex == "M" else 0.0
+            features["sex_F"] = 1.0 if sex == "F" else 0.0
+            features["comorbidity_chf"] = float(static.get("comorbidity_chf", False) or False)
+            features["comorbidity_renal"] = float(static.get("comorbidity_renal", False) or False)
+            features["comorbidity_liver"] = float(static.get("comorbidity_liver", False) or False)
+            features["comorbidity_copd"] = float(static.get("comorbidity_copd", False) or False)
+            features["comorbidity_diabetes"] = float(static.get("comorbidity_diabetes", False) or False)
+        else:
+            features["age"] = static.age or 50
+            features["sex_M"] = 1.0 if static.sex == "M" else 0.0
+            features["sex_F"] = 1.0 if static.sex == "F" else 0.0
+            features["comorbidity_chf"] = float(static.comorbidity_chf)
+            features["comorbidity_renal"] = float(static.comorbidity_renal)
+            features["comorbidity_liver"] = float(static.comorbidity_liver)
+            features["comorbidity_copd"] = float(static.comorbidity_copd)
+            features["comorbidity_diabetes"] = float(static.comorbidity_diabetes)
     else:
         # Defaults
         features["age"] = 50
@@ -149,6 +184,93 @@ def convert_timeline_to_features(
     return feature_df
 
 
+def convert_timeline_to_sequence(
+    timeline: PatientTimeline, task: str, model_config: Optional[Dict]
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, list]:
+    """
+    Convert patient timeline to sequence format for GRU/Transformer models.
+    
+    Returns:
+        Tuple of (sequence, static, mask, feature_names)
+    """
+    config = get_feature_config()
+    
+    # Default parameters
+    seq_len = model_config.get("seq_len", 12) if model_config else 12
+    input_dim = model_config.get("input_dim", 10) if model_config else 10
+    static_dim = model_config.get("static_dim", 8) if model_config else 8
+    
+    # Get vital and lab codes
+    vital_codes = list(config["features"]["vitals"].keys())
+    lab_codes = list(config["features"]["labs"].keys())
+    med_codes = config["features"]["medications"]
+    
+    # Feature names for sequence
+    feature_names = vital_codes + lab_codes + med_codes
+    
+    # Sort events by time
+    sorted_events = sorted(timeline.events, key=lambda e: e.time)
+    
+    # Create sequence tensor - shape [seq_len, input_dim]
+    sequence = np.zeros((seq_len, len(feature_names)), dtype=np.float32)
+    mask = np.zeros(seq_len, dtype=np.float32)
+    
+    # Group events by time bin (simplified - just use first seq_len events)
+    time_idx = 0
+    last_time = None
+    
+    for event in sorted_events:
+        if time_idx >= seq_len:
+            break
+            
+        # Check if we should advance time bin
+        if last_time is not None and event.time != last_time:
+            time_idx += 1
+            if time_idx >= seq_len:
+                break
+        
+        last_time = event.time
+        mask[time_idx] = 1.0
+        
+        # Find feature index
+        if event.code in feature_names:
+            feat_idx = feature_names.index(event.code)
+            if event.value is not None:
+                sequence[time_idx, feat_idx] = float(event.value)
+            elif event.type == "medication":
+                sequence[time_idx, feat_idx] = 1.0
+    
+    # If no events, set at least one mask position
+    if mask.sum() == 0:
+        mask[0] = 1.0
+    
+    # Create static features
+    static = np.zeros(static_dim, dtype=np.float32)
+    sf = timeline.static_features
+    
+    if sf is not None:
+        if isinstance(sf, dict):
+            static[0] = float(sf.get("age", 50) or 50) / 100.0
+            static[1] = 1.0 if sf.get("sex") == "M" else 0.0
+            static[2] = float(sf.get("comorbidity_chf", False) or False)
+            static[3] = float(sf.get("comorbidity_renal", False) or False)
+            static[4] = float(sf.get("comorbidity_liver", False) or False)
+            static[5] = float(sf.get("comorbidity_copd", False) or False)
+            static[6] = float(sf.get("comorbidity_diabetes", False) or False)
+        else:
+            static[0] = float(sf.age or 50) / 100.0
+            static[1] = 1.0 if sf.sex == "M" else 0.0
+            static[2] = float(sf.comorbidity_chf)
+            static[3] = float(sf.comorbidity_renal)
+            static[4] = float(sf.comorbidity_liver)
+            static[5] = float(sf.comorbidity_copd)
+            static[6] = float(sf.comorbidity_diabetes)
+    else:
+        static[0] = 0.5  # default age
+    
+    return sequence, static, mask, feature_names
+
+
 @router.post("/predict/{task}", response_model=PredictionResponse)
 async def predict(
     task: TaskType,
@@ -168,7 +290,7 @@ async def predict(
     """
     try:
         # Load model
-        model = load_model_from_cache(task.value, model_type)
+        model, model_config = load_model_from_cache(task.value, model_type)
 
         # Convert timeline to features
         features_df = convert_timeline_to_features(timeline, task.value)
@@ -210,10 +332,35 @@ async def predict(
             )
 
         else:
-            # Sequence model prediction (placeholder)
-            raise HTTPException(
-                status_code=501,
-                detail="Sequence model predictions not yet implemented",
+            # Sequence model prediction (GRU or Transformer)
+            from ehrtriage.explain.attribution import explain_sequence_prediction
+            
+            # Convert features to sequence format
+            sequence, static, mask, feature_names = convert_timeline_to_sequence(
+                timeline, task.value, model_config
+            )
+            
+            # Get prediction with explanations
+            result = explain_sequence_prediction(
+                model=model,
+                sequence=sequence,
+                static=static,
+                mask=mask,
+                feature_names=feature_names,
+                top_k_timesteps=3,
+                top_k_features=5,
+                device="cpu",
+            )
+            
+            risk_score = result["risk_score"]
+            important_events = result["important_events"]
+            
+            # Generate explanation
+            explanation_text, contributing = explain_prediction(
+                model_type=model_type,
+                risk_score=risk_score,
+                task=task.value,
+                important_events=important_events,
             )
 
         # Determine risk level
@@ -239,7 +386,11 @@ async def predict(
             model_version="0.1.0",
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Prediction error: {str(e)}")
 
 
