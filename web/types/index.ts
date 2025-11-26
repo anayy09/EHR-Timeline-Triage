@@ -2,35 +2,45 @@
 
 export interface Event {
   time: string;
-  type: 'vital' | 'lab' | 'medication' | 'admission' | 'discharge' | 'icu_in' | 'icu_out' | 'other';
+  type: 'vital' | 'lab' | 'medication' | 'procedure' | 'diagnosis' | string;
   code: string | null;
   value: number | null;
   unit?: string;
+}
+
+export interface StaticFeatures {
+  age?: number;
+  sex?: 'M' | 'F' | 'O' | 'U';
+  comorbidity_chf?: boolean;
+  comorbidity_renal?: boolean;
+  comorbidity_liver?: boolean;
+  comorbidity_copd?: boolean;
+  comorbidity_diabetes?: boolean;
 }
 
 export interface PatientTimeline {
   subject_id: string;
   stay_id: string | null;
   events: Event[];
-  static_features?: Record<string, any>;
+  static_features?: StaticFeatures | Record<string, any>;
 }
 
 export interface ContributingEvent {
-  feature_name: string;
-  time_period: string;
-  value: number | string;
-  contribution: number;
-  interpretation: string;
+  time: string;
+  type: string;
+  code: string;
+  value: number | null;
+  contribution_score: number;
 }
 
 export interface PredictionResponse {
-  task: string;
+  task: 'readmission' | 'icu_mortality';
   risk_score: number;
-  risk_label: 'Low' | 'Medium' | 'High';
+  risk_label: 'low' | 'medium' | 'high';
   explanation: string;
   contributing_events: ContributingEvent[];
-  model_type: string;
-  prediction_time: string;
+  model_name: string;
+  model_version?: string;
 }
 
 export interface ExampleTimeline {
@@ -38,4 +48,13 @@ export interface ExampleTimeline {
   description: string;
   timeline: PatientTimeline;
   expected_risk: 'Low' | 'Medium' | 'High';
+}
+
+export interface ModelInfo {
+  task: 'readmission' | 'icu_mortality';
+  model_name: string;
+  model_type: string;
+  version: string;
+  metrics: Record<string, any>;
+  trained_date?: string;
 }
